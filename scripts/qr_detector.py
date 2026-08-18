@@ -11,7 +11,7 @@ sizes = [
 
 def parse_pcb_for_silkscreen_elements(pcb_path):
     """Parses the .kicad_pcb file to find silkscreen elements and their bounding boxes."""
-    with open(pcb_path, 'r') as f:
+    with open(pcb_path, 'r', encoding='utf-8') as f:
         content = f.read()
 
     # This pattern looks for (gr_text
@@ -45,7 +45,7 @@ def parse_pcb_for_silkscreen_elements(pcb_path):
     valid_rects = []
 
     for gr_rect in gr_rects:
-        if "fill yes" in gr_rect and ('layer "F.SilkS"' in gr_rect or 'layer "B.SilkS"' in gr_rect):
+        if ("fill yes" in gr_rect or "fill solid" in gr_rect) and ('layer "F.SilkS"' in gr_rect or 'layer "B.SilkS"' in gr_rect):
             temp_params = []
             start_match = re.search(r'\(start\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\)', gr_rect)
             end_match = re.search(r'\(end\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\)', gr_rect)
