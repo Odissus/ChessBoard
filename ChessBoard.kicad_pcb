@@ -5397,7 +5397,7 @@
 		)
 		(path "/ab45b0a8-7358-419f-90be-54987f288a63")
 		(sheetfile "ChessBoard.kicad_sch")
-		(attr exclude_from_pos_files)
+		(attr exclude_from_pos_files exclude_from_bom)
 		(fp_circle
 			(center 0 0)
 			(end 2.1 0)
@@ -9454,7 +9454,7 @@
 		)
 		(path "/ca42600b-6264-412f-af39-171a667bca9f")
 		(sheetfile "ChessBoard.kicad_sch")
-		(attr exclude_from_pos_files)
+		(attr exclude_from_pos_files exclude_from_bom)
 		(fp_circle
 			(center 0 0)
 			(end 2.1 0)
@@ -32759,7 +32759,7 @@
 		)
 		(path "/3ccda582-4128-4506-8758-010db9a3c243")
 		(sheetfile "ChessBoard.kicad_sch")
-		(attr exclude_from_pos_files)
+		(attr exclude_from_pos_files exclude_from_bom)
 		(fp_circle
 			(center 0 0)
 			(end 2.1 0)
@@ -39850,7 +39850,7 @@
 		)
 		(path "/3bf80fb3-32fc-44d0-874a-62aa8fdae903")
 		(sheetfile "ChessBoard.kicad_sch")
-		(attr exclude_from_pos_files)
+		(attr exclude_from_pos_files exclude_from_bom)
 		(fp_circle
 			(center 0 0)
 			(end 2.1 0)
@@ -42188,7 +42188,7 @@
 		)
 		(path "/a950ea2c-ff19-4b2c-848a-40136caa791e")
 		(sheetfile "ChessBoard.kicad_sch")
-		(attr smd exclude_from_pos_files)
+		(attr smd exclude_from_pos_files exclude_from_bom)
 		(fp_line
 			(start -8.89 43.18)
 			(end 8.89 43.18)
