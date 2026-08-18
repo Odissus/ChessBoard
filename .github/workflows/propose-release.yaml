@@ -1,0 +1,13 @@
+name: Release proposal
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  release-proposal:
+    uses: ./.github/workflows/handle-release.yaml
+    with:
+      is_release: false

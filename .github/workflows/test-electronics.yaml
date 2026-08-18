@@ -1,0 +1,65 @@
+name: Electronics tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  erc_with_drc:
+    runs-on: ubuntu-latest
+    name: Check ERC and DRC
+    env:
+      PCB_NAME: VFMRpi
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Get PCB name from .kicad_pro file
+        run: |
+            PRO_FILE=$(find . -maxdepth 1 -name "*.kicad_pro" -print -quit)
+            if [ -z "$PRO_FILE" ]; then
+                echo "No .kicad_pro file found in the root directory!"
+                exit 1
+            fi
+            PCB_NAME=$(basename "$PRO_FILE" .kicad_pro)
+            echo "PCB_NAME=$PCB_NAME" >> $GITHUB_ENV
+
+      - name: Run KiCad ERC
+        id: erc
+        uses: sparkengineering/kicad-action@v4
+        if: '!cancelled()'
+        with:
+          kicad_sch: ${{ env.PCB_NAME }}.kicad_sch
+          sch_erc: true
+          pcb_drc: true
+
+      - name: Run KiCad DRC
+        id: drc
+        uses: sparkengineering/kicad-action@v4
+        if: '!cancelled()'
+        with:
+          kicad_pcb: ${{ env.PCB_NAME }}.kicad_pcb
+          pcb_drc: true
+
+      # Upload ERC report only if ERC failed
+      - name: Upload ERC report
+        uses: actions/upload-artifact@v7
+        if: ${{ failure() && steps.erc.conclusion == 'failure' }}
+        with:
+          name: erc.rpt
+          path: ${{ github.workspace }}/erc.rpt
+          archive: false
+
+      # Upload DRC report only if DRC failed
+      - name: Upload DRC report
+        uses: actions/upload-artifact@v7
+        if: ${{ failure() && steps.drc.conclusion == 'failure' }}
+        with:
+          name: drc.rpt
+          path: ${{ github.workspace }}/drc.rpt
+          archive: false

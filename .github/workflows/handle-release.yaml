@@ -1,0 +1,276 @@
+name: Build PCB Production Package
+
+on:
+  workflow_call:
+    inputs:
+      is_release:
+        required: true
+        type: boolean
+        description: "True if creating an official GH Release, False if doing a PR proposal summary"
+
+jobs:
+  handle-release:
+    runs-on: ubuntu-latest
+    env:
+      PCB_NAME: PCB # Default vaule, do not edit, will be overwritten by the script that finds the .kicad_pro file
+      VERSION: 0.0.0 # Default value, do not edit, will be overwritten by the script that extracts the version from bumpversion
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Set up Python cache
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.13'
+        cache: 'pip'
+        cache-dependency-path: '**/scripts/requirements.txt'
+            
+    - name: Set up docker cache
+      id: cache-docker
+      uses: actions/cache@v5
+      with:
+        path: /tmp/kicad-docker-image.tar
+        key: ${{ runner.os }}-docker-kicad-10.0
+
+    - name: Check for backup files
+      run: |
+        PRO_FILE=$(find . -maxdepth 1 -name "*.kicad_pro" -print -quit)
+        if [ -z "$PRO_FILE" ]; then
+            echo "No .kicad_pro file found in the root directory!"
+            exit 1
+        fi
+        PCB_NAME=$(basename "$PRO_FILE" .kicad_pro)
+        echo "PCB_NAME=$PCB_NAME" >> $GITHUB_ENV
+
+    - name: Install bumpversion
+      run: pip install --break-system-packages bump2version
+
+    - name: Get version and extract changelog for Release
+      run: |
+        VERSION=$(bump2version --dry-run --list patch | grep current_version | sed -r s,"^.*=",,)
+        awk "/## \[$VERSION\]/,/^$/" CHANGELOG.md | tail -n +2 | sed '/^$/d' > changelog_tmp.txt
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        cp changelog_tmp.txt Changelog.md
+
+    - name: Install 3D fixer dependencies
+      run: pip install --break-system-packages -r scripts/requirements.txt
+
+    - name: Install system GL dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1 libegl1
+
+    - name: Generate production files
+      uses: sparkengineering/kicad-action@v4
+      with:
+        kicad_sch: ${{ env.PCB_NAME }}.kicad_sch
+        kicad_pcb: ${{ env.PCB_NAME }}.kicad_pcb
+        sch_pdf: true
+        sch_pdf_file: Schematic.pdf
+        sch_bom: false 
+        pcb_gerbers: false 
+        pcb_image: false
+        pcb_image_path: ${{ github.workspace }}
+
+    - name: Fix 3D models
+      run: |
+        python3 scripts/fix3D.py \
+          --kiprjmod ${{ github.workspace }} \
+          --pcb "${{ github.workspace }}/${{ env.PCB_NAME }}.kicad_pcb"
+
+    - name: Fix colours
+      run: |
+        python3 scripts/fixColours.py \
+          --pcb "${{ github.workspace }}/${{ env.PCB_NAME }}.kicad_pcb"
+
+    - name: Create relay folder for 3D model and render exports
+      run: |
+        mkdir -p ${{ github.workspace }}/output
+        chmod -R 777 ${{ github.workspace }}/output
+
+    - name: Load KiCad Image from Cache if available
+      if: steps.cache-docker.outputs.cache-hit == 'true'
+      run: docker load -i /tmp/kicad-docker-image.tar
+
+    - name: Pre-fetch and Save KiCad Image if Cache Missed
+      if: steps.cache-docker.outputs.cache-hit != 'true'
+      run: |
+        docker pull kicad/kicad:10.0
+        docker save kicad/kicad:10.0 -o /tmp/kicad-docker-image.tar
+
+    - name: Align and export 3D Model
+      run: |
+        docker run --rm \
+          -v ${{ github.workspace }}:/github/workspace \
+          -w /github/workspace \
+          kicad/kicad:10.0 /bin/bash -c "
+          mkdir -p /tmp/kicad_home &&
+          export HOME=/tmp/kicad_home &&
+          export XDG_CONFIG_HOME=/tmp/kicad_home/.config &&
+          export XDG_CACHE_HOME=/tmp/kicad_home/.cache &&
+
+          kicad-cli pcb export step \
+          --output /github/workspace/output/Pcb.step \
+          --subst-models \
+          --drill-origin \
+          --include-tracks \
+          --include-soldermask \
+          --include-silkscreen \
+          /github/workspace/${{ env.PCB_NAME }}.kicad_pcb &&
+          
+          kicad-cli pcb render \
+          --output /github/workspace/output/Image_Top.png \
+          --side top \
+          --quality high \
+          --width 3200 \
+          --height 3200 \
+          /github/workspace/${{ env.PCB_NAME }}.kicad_pcb &&
+          
+          kicad-cli pcb render \
+          --output /github/workspace/output/Image_Bottom.png \
+          --side bottom \
+          --quality high \
+          --width 3200 \
+          --height 3200 \
+          /github/workspace/${{ env.PCB_NAME }}.kicad_pcb"
+
+    - name: Move 3D model and render exports to repository root
+      run: mv ${{ github.workspace }}/output/* ${{ github.workspace }}/
+
+    # --- CONDITIONAL FORK 1: PROPOSAL PATHWAY ---
+    - name: Generate Upload Status Report
+      if: ${{ !inputs.is_release }}
+      run: |
+        echo "## Uploads" > upload_report.md
+        echo "### General" >> upload_report.md
+        for f in Changelog.md Image_Top.png Image_Bottom.png Pcb.step Schematic.pdf; do
+          [ -f "${{ github.workspace }}/$f" ] && echo "- :white_check_mark: $f" >> upload_report.md || echo "- :x: $f" >> upload_report.md
+        done
+        echo "### JLCPCB" >> upload_report.md
+        for f in BOM.csv Positions.csv Gerber.zip; do
+          [ -f "${{ github.workspace }}/jlcpcbProduction/$f" ] && echo "- :white_check_mark: $f" >> upload_report.md || echo "- :x: $f" >> upload_report.md
+        done
+
+    - name: Upload Proposal to Job Summary
+      if: ${{ !inputs.is_release }}
+      run: |
+        echo "# Release Proposal" > release_body.md
+        echo "## Changes" >> release_body.md
+        cat changelog_tmp.txt >> release_body.md
+        cat upload_report.md >> release_body.md
+        cat release_body.md >> $GITHUB_STEP_SUMMARY
+
+    - name: Upload Changelog
+      if: ${{ !inputs.is_release }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: Changelog.md
+        path: ${{ github.workspace }}/Changelog.md
+        archive: false
+
+    - name: Upload Top PCB Image
+      if: ${{ !inputs.is_release }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: Image_Top.png
+        path: ${{ github.workspace }}/Image_Top.png
+        archive: false
+
+    - name: Upload Bottom PCB Image
+      if: ${{ !inputs.is_release }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: Image_Bottom.png
+        path: ${{ github.workspace }}/Image_Bottom.png
+        archive: false
+
+    - name: Upload PCB STEP file
+      if: ${{ !inputs.is_release }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: Pcb.step
+        path: ${{ github.workspace }}/Pcb.step
+        archive: false
+
+    - name: Upload PCB Schematic PDF
+      if: ${{ !inputs.is_release }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: Schematic.pdf
+        path: ${{ github.workspace }}/Schematic.pdf
+        archive: false
+
+    - name: Upload JLCPCB BOM if exists
+      if: ${{ !inputs.is_release }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: JLCPCB_Bill_of_materials.csv
+        path: ${{ github.workspace }}/jlcpcbProduction/BOM.csv
+        if-no-files-found: ignore
+        archive: false
+
+    - name: Upload JLCPCB Positions if exists
+      if: ${{ !inputs.is_release }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: JLCPCB_Positions.csv
+        path: ${{ github.workspace }}/jlcpcbProduction/Positions.csv
+        if-no-files-found: ignore
+        archive: false
+
+    - name: Upload JLCPCB Gerber package if exists
+      if: ${{ !inputs.is_release }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: JLCPCB_Gerber.zip
+        path: ${{ github.workspace }}/jlcpcbProduction/Gerber.zip
+        if-no-files-found: ignore
+        archive: false
+
+    # --- CONDITIONAL FORK 2: MAIN PRODUCTION RELEASE PATHWAY ---
+    - name: Normalize JLCPCB Asset Names for Release Package
+      if: ${{ inputs.is_release }}
+      run: |
+        [ -f "${{ github.workspace }}/jlcpcbProduction/BOM.csv" ] && mv "${{ github.workspace }}/jlcpcbProduction/BOM.csv" "${{ github.workspace }}/JLCPCB_Bill_of_materials.csv" || true
+        [ -f "${{ github.workspace }}/jlcpcbProduction/Positions.csv" ] && mv "${{ github.workspace }}/jlcpcbProduction/Positions.csv" "${{ github.workspace }}/JLCPCB_Positions.csv" || true
+        [ -f "${{ github.workspace }}/jlcpcbProduction/Gerber.zip" ] && mv "${{ github.workspace }}/jlcpcbProduction/Gerber.zip" "${{ github.workspace }}/JLCPCB_Gerber.zip" || true
+
+    - name: Generate final release body file
+      run: |
+        # Create a blank file
+        cat << 'EOF' > release_body.md
+        # Changes
+
+        EOF
+        
+        # Append the extracted changelog content
+        cat changelog_tmp.txt >> release_body.md
+        
+        # Append the Preview section
+        cat << 'EOF' >> release_body.md
+
+        # Preview
+
+        | Top | Bottom |
+        | :---: | :---: |
+        | <img alt='PCB top render' src='https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/Image_Top.png' /> | <img alt='PCB bottom render' src='https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/Image_Bottom.png' /> |
+        EOF
+
+    - name: Create Release and upload Assets
+      if: ${{ inputs.is_release }}
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ env.VERSION }}
+        name: v${{ env.VERSION }}
+        body_path: release_body.md
+        files: |
+          Changelog.md
+          Image_Top.png
+          Image_Bottom.png
+          Pcb.step
+          Schematic.pdf
+          JLCPCB_Bill_of_materials.csv
+          JLCPCB_Positions.csv
+          JLCPCB_Gerber.zip
