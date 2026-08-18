@@ -1,0 +1,12 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    uses: ./.github/workflows/handle-release.yaml
+    with:
+      is_release: true

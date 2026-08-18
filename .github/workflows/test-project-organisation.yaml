@@ -1,0 +1,123 @@
+name: Repository organisation tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  versioning_files_tests:
+    runs-on: ubuntu-latest
+    name: Check versioning files
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check versioning files existence
+        run: |
+          if [ ! -f ".bumpversion.cfg" ]; then
+            echo ".bumpversion.cfg file is missing!"
+            exit 1
+          fi
+
+          if [ ! -f "CHANGELOG.md" ]; then
+            echo "CHANGELOG.md file is missing!"
+            exit 1
+          fi
+
+      - name: Install bumpversion
+        run: pip install --break-system-packages bump2version
+
+      - name: Check if version exists in all necessary files
+        run: |
+          VERSION=$(bump2version --dry-run --list patch | grep current_version | sed -r s,"^.*=",,)
+          if [ -z "$VERSION" ]; then
+              echo "Could not determine current version from bumpversion!"
+              exit 1
+          fi
+
+      - name: Check if bumpversion tracks all pcb and schematic files
+        run: |
+          MISSING_FILES=0
+          
+          # Find files and check config
+          while read -r file; do
+              filename=$(basename "$file")
+              if ! grep -q "$filename" .bumpversion.cfg; then
+                  echo "::error file=$file::Missing from .bumpversion.cfg"
+                  MISSING_FILES=1
+              fi
+          done < <(find . -type f \( -name "*.kicad_pcb" -o -name "*.kicad_sch" \))
+
+          # Fail the step if any files were missing
+          if [ $MISSING_FILES -ne 0 ]; then
+              echo "Error: Some KiCad files are not tracked in .bumpversion.cfg"
+              exit 1
+          fi
+
+      - name: Check if changelog date it today's date
+        id: get_version_and_changelog
+        run: |
+            VERSION=$(bump2version --dry-run --list patch | grep current_version | sed -r s,"^.*=",,)
+            DATE=$(awk '/## \['$VERSION'\]/ { print $NF; exit }' CHANGELOG.md)
+            TODAY=$(date +%Y-%m-%d)
+
+            STR_TIME=$(date -d "$DATE" +%s)
+            NOW_TIME=$(date -d "$TODAY" +%s)
+
+            if [ "$STR_TIME" -eq "$NOW_TIME" ]; then
+                echo "Date in changelog matches today's date."
+            elif [ "$STR_TIME" -lt "$NOW_TIME" ]; then
+                echo "The changelog date is in the past."
+                exit 1  # We can change that if we want to allow flexibility
+            else
+                echo "The changelog date is in the future."
+                exit 1
+            fi
+
+  ensure_qr_code_placeholder_exists:
+    runs-on: ubuntu-latest
+    name: Check QR code placeholder exists
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check for QR code footprint in the pcb file
+        run: |
+          PRO_FILE=$(find . -maxdepth 1 -name "*.kicad_pro" -print -quit)
+
+          if [ -z "$PRO_FILE" ]; then
+              echo "No .kicad_pro file found in the root directory!"
+              exit 1
+          fi
+
+          PROJECT_NAME=$(basename "$PRO_FILE" .kicad_pro)
+          python3 scripts/qr_detector.py \
+            --pcb "${{ github.workspace }}/${PROJECT_NAME}.kicad_pcb" \
+            --crash-if-not-one
+
+  ensure_jlcpcb_production_files_exists:
+    runs-on: ubuntu-latest
+    name: Check JLCPCB production files exists
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check for JLCPCB production files
+        run: |
+          REQUIRED_FILES=(
+            "${{ github.workspace }}/jlcpcbProduction/BOM.csv"
+            "${{ github.workspace }}/jlcpcbProduction/Positions.csv"
+            "${{ github.workspace }}/jlcpcbProduction/Gerber.zip"
+          )
+
+          for FILE in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$FILE" ]; then
+              echo "Missing Required File: $FILE"
+              exit 1
+            fi
+          done
